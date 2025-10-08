@@ -6,13 +6,18 @@ model:
   classes: [0]
   frame_freq: 5
   
+reid:
+  max_age: 10
+  n_init: 3
+  nn_budget: 100
 
 protocol: "udp"
 
 server:
   host: "localhost"
-  port: 5000
+  port: 8888
   buffer_size: 100000
+  socket_timeout: 0
 
 instances:
   - name: "camera_1"
