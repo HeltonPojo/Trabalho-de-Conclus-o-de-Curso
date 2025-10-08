@@ -8,30 +8,29 @@ import numpy as np
 from ultralytics import YOLO
 
 
-def create_client_socket(transmission_cfg, cfg):
+def create_client_socket(transmission_cfg, server_cfg):
     """Cria um socket UDP ou TCP dependendo da configuração."""
     protocol = cfg.get("protocol", "udp").lower()
+
     if protocol == "udp":
         client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         client.setsockopt(
-            socket.SOL_SOCKET, socket.SO_RCVBUF, transmission_cfg["buffer_size"]
+            socket.SOL_SOCKET, socket.SO_RCVBUF, server_cfg["buffer_size"]
         )
-        client.bind((transmission_cfg["client_host"], transmission_cfg["client_port"]))
+        client.bind((transmission_cfg["host"], transmission_cfg["port"]))
         return client
     elif protocol == "tcp":
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client.connect(
-            (transmission_cfg["server_host"], transmission_cfg["server_port"])
-        )
+        client.connect((server_cfg["host"], server_cfg["port"]))
         return client
     else:
         raise ValueError(f"Unsupported protocol: {protocol}")
 
 
-def enviar_mensagens(fila, transmission_cfg):
+def enviar_mensagens(fila, transmission_cfg, server_cfg):
     """Thread responsável por enviar as mensagens (imagens ou dados)."""
     protocol = transmission_cfg.get("protocol", "udp").lower()
-    server_addr = (transmission_cfg["server_host"], transmission_cfg["server_port"])
+    server_addr = (server_cfg["host"], server_cfg["port"])
 
     if protocol == "udp":
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -113,7 +112,8 @@ def obj_detect(command_ref, fila, video_path, model_cfg):
 def run_instance(instance_cfg, cfg):
     """Executa uma instância completa de leitura e envio."""
     transmission_cfg = instance_cfg["transmission"]
-    client = create_client_socket(transmission_cfg, cfg)
+    server_cfg = cfg["server"]
+    client = create_client_socket(transmission_cfg, server_cfg)
     command_ref = {"state": "wait"}
     fila = queue.Queue()
 
@@ -123,7 +123,7 @@ def run_instance(instance_cfg, cfg):
         args=(command_ref, fila, instance_cfg["video"], cfg["model"]),
     )
     send_thread = threading.Thread(
-        target=enviar_mensagens, args=(fila, transmission_cfg)
+        target=enviar_mensagens, args=(fila, transmission_cfg, server_cfg)
     )
 
     print(f"[INFO] Instância '{instance_cfg['name']}' iniciada. Aguardando comandos...")
