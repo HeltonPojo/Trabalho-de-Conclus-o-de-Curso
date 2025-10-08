@@ -1,0 +1,171 @@
+import socket
+import threading
+import queue
+import argparse
+import yaml
+import cv2
+import numpy as np
+from ultralytics import YOLO
+
+
+def create_client_socket(transmission_cfg, cfg):
+    """Cria um socket UDP ou TCP dependendo da configuração."""
+    protocol = cfg.get("protocol", "udp").lower()
+    if protocol == "udp":
+        client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        client.setsockopt(
+            socket.SOL_SOCKET, socket.SO_RCVBUF, transmission_cfg["buffer_size"]
+        )
+        client.bind((transmission_cfg["client_host"], transmission_cfg["client_port"]))
+        return client
+    elif protocol == "tcp":
+        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client.connect(
+            (transmission_cfg["server_host"], transmission_cfg["server_port"])
+        )
+        return client
+    else:
+        raise ValueError(f"Unsupported protocol: {protocol}")
+
+
+def enviar_mensagens(fila, transmission_cfg):
+    """Thread responsável por enviar as mensagens (imagens ou dados)."""
+    protocol = transmission_cfg.get("protocol", "udp").lower()
+    server_addr = (transmission_cfg["server_host"], transmission_cfg["server_port"])
+
+    if protocol == "udp":
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        while True:
+            item = fila.get()
+            if item is None:
+                break
+            try:
+                sock.sendto(item["header"], server_addr)
+                sock.sendto(item["buff"], server_addr)
+            except Exception as e:
+                print(f"[ERRO][UDP]: {e}")
+    elif protocol == "tcp":
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.connect(server_addr)
+            while True:
+                item = fila.get()
+                if item is None:
+                    break
+                try:
+                    sock.sendall(item["header"] + item["buff"])
+                except Exception as e:
+                    print(f"[ERRO][TCP]: {e}")
+    else:
+        print(
+            f"[ERRO] Protocolo '{protocol}' ainda não implementado (ex: gRPC/WebRTC)."
+        )
+
+
+def obj_detect(command_ref, fila, video_path, model_cfg):
+    """Thread de detecção de objetos."""
+    cam = cv2.VideoCapture(video_path)
+    model = YOLO(model_cfg["path"], task="detect")
+
+    model.overrides.update(
+        {
+            "conf": model_cfg.get("conf", 0.7),
+            "agnostic_nms": model_cfg.get("agnostic_nms", True),
+            "single_cls": model_cfg.get("single_cls", True),
+            "classes": model_cfg.get("classes", [0]),
+        }
+    )
+
+    frame_count = 0
+    frame_freq = model_cfg.get("frame_freq", 5)
+
+    try:
+        while command_ref["state"] == "start":
+            ret, img = cam.read()
+            if not ret:
+                break
+
+            frame_count += 1
+            if frame_count % frame_freq != 0:
+                continue
+
+            results = model(img)
+            for result in results:
+                if not result.boxes:
+                    continue
+
+                boxes = result.boxes.xyxy.cpu().numpy()
+                confidences = result.boxes.conf.cpu().numpy()
+
+                for box, confidence in zip(boxes, confidences):
+                    if confidence > model_cfg.get("conf", 0.7):
+                        box = np.intp(box)
+                        _, buffer = cv2.imencode(
+                            ".jpg", img[box[1] : box[3], box[0] : box[2]]
+                        )
+                        size = len(buffer)
+                        header = f"{size}\0".encode("utf-8")
+                        fila.put({"header": header, "buff": buffer})
+    finally:
+        cam.release()
+        print("[INFO] Captura finalizada.")
+
+
+def run_instance(instance_cfg, cfg):
+    """Executa uma instância completa de leitura e envio."""
+    transmission_cfg = instance_cfg["transmission"]
+    client = create_client_socket(transmission_cfg, cfg)
+    command_ref = {"state": "wait"}
+    fila = queue.Queue()
+
+    # Threads
+    detect_thread = threading.Thread(
+        target=obj_detect,
+        args=(command_ref, fila, instance_cfg["video"], cfg["model"]),
+    )
+    send_thread = threading.Thread(
+        target=enviar_mensagens, args=(fila, transmission_cfg)
+    )
+
+    print(f"[INFO] Instância '{instance_cfg['name']}' iniciada. Aguardando comandos...")
+    while command_ref["state"] != "exit":
+        msg = client.recv(64).decode()
+        print(msg)
+        if len(msg) > 0:
+            print(f"[{instance_cfg['name']}] Mensagem recebida: {msg}")
+            if msg == "start" and command_ref["state"] != msg:
+                command_ref["state"] = msg
+                detect_thread.start()
+                send_thread.start()
+            elif msg == "exit":
+                command_ref["state"] = msg
+                fila.put(None)
+                detect_thread.join()
+                send_thread.join()
+                print(f"[INFO] Instância '{instance_cfg['name']}' finalizada.")
+
+
+def main(cfg):
+    threads = []
+    for instance_cfg in cfg["instances"]:
+        t = threading.Thread(target=run_instance, args=(instance_cfg, cfg))
+        t.start()
+        threads.append(t)
+
+    for t in threads:
+        t.join()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-s",
+        "--source-config-file",
+        default="./config.yaml",
+        help="Input your config.yaml file",
+    )
+    args = parser.parse_args()
+
+    with open(args.source_config_file, "r") as f:
+        cfg = yaml.safe_load(f)
+
+    main(cfg)

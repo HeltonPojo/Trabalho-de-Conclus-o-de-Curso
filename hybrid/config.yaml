@@ -1,0 +1,35 @@
+model: 
+      path: "./models/yolo12n.pt"
+      conf: 0.7
+      agnostic_nms: true
+      single_cls: true
+      classes: [0]
+
+protocol: "udp"
+
+network:
+  protocol: "udp"
+  server_host: "localhost"
+  server_port: 5000
+  client_host: "localhost"
+  client_port: 5001
+  buffer_size: 100000
+
+instances:
+  - name: "camera_1"
+    video: "./videos/4p-c0.avi"
+    transmission:
+      server_host: "localhost"
+      server_port: 5000
+      client_host: "localhost"
+      client_port: 5001
+      buffer_size: 100000
+  - name: "camera_2"
+    video: "./videos/4p-c1.avi"
+    transmission:
+      server_host: "localhost"
+      server_port: 5000
+      client_host: "localhost"
+      client_port: 5002
+      buffer_size: 100000
+
