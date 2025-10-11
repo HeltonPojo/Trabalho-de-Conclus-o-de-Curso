@@ -2,7 +2,7 @@
 
 - [X] Criar a lista de atividades a serem realizadas
 
-- [ ] Enviar termo de ciencia do fabiano
+- [X] Enviar termo de ciencia do fabiano
 
 - [ ] Validar referencias
   - [ ] YOLOv3: An Incremental Improvement
@@ -49,7 +49,12 @@
 
 - [ ] Avaliar outros modelos de IA
 
-- [ ] [TR] Desenvolvimento do servidor
+- [x] [TR] Desenvolvimento do servidor
+  - [x] [TR] Criar estrutura de classe para o servidor
+  - [x] [TR] Criar estrutura de log
+  - [x] [TR] Realziar a digestão em threads
+  - [ ] [TR] Debugar porque o servidor demora para receber as mensagens dos nós
+  - [X] [TR] Debugar problema de expection of frame ....
   - [ ] [TR] Teste do deep_sort_realtime
 
 - [ ] Analise e avaliação das arquiteturas

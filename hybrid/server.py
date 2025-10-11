@@ -81,7 +81,6 @@ class PersonReidentificationServer:
         if self.cfg is None or self.logger is None:
             return
 
-        # Initialize server socket
         netcfg = self.cfg["server"]
         server_host = netcfg.get("host", "0.0.0.0")
         server_port = netcfg.get("port", 5000)
@@ -89,7 +88,6 @@ class PersonReidentificationServer:
         try:
             self.server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-            # Set socket options to avoid "Resource temporarily unavailable"
             self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
             # On Linux, you might need SO_REUSEPORT instead
@@ -104,13 +102,11 @@ class PersonReidentificationServer:
             self.logger.error(f"Failed to initialize server socket: {e}")
             return False
 
-        # Initialize clients list
         self.clients = self.get_clients()
         self.logger.info(
             f"Loaded {len(self.clients) if self.clients is not None else []} clients from configuration"
         )
 
-        # Initialize DeepSORT tracker
         reid_cfg = self.cfg.get("reid", {})
         try:
             self.tracker = DeepSort(
@@ -179,7 +175,6 @@ class PersonReidentificationServer:
             "last_seen": datetime.now().isoformat(),
         }
 
-        # Register line for output
         _, port = addr
         self.id_counter += 1
 
@@ -194,39 +189,26 @@ class PersonReidentificationServer:
             return
 
         try:
-            print(f"[DEBUG] {1}")
-            # addr is (ip, port)
             _, port = addr
 
-            # Run DeepSORT on full frame to get embedding
-            print(f"[DEBUG] {2}")
             h, w = frame.shape[:2]
-            print(f"[DEBUG] {3}")
-            detections = [[0, 0, w, h, 1.0]]
-            print(f"[DEBUG] {4}")
+            detections = [([0, 0, w, h], 1.0, "person")]
+
             tracks = self.tracker.update_tracks(detections, frame=frame)
 
-            print(f"[DEBUG] {4}")
-            # Try to obtain an embedding from the track(s)
             embedding = None
             for tr in tracks:
-                # DeepSort tracks have 'features' list (embeddings)
-
-                print(f"[DEBUG] {tr.features}")
                 if tr.features and len(tr.features) > 0:
                     embedding = np.asarray(tr.features[-1], dtype=np.float32)
                     break
 
             if embedding is None:
-                # Fallback: compute simple feature (e.g., global average color)
                 embedding = np.mean(frame, axis=(0, 1)).astype(np.float32)
                 embedding = embedding.flatten()
                 self.logger.debug("Used fallback feature extraction")
 
-            # Ensure embedding is 1D numpy array
             embedding = embedding.flatten()
 
-            # If no persons known yet -> add first
             if not self.detectedPersons:
                 pid = self.add_new_person(
                     np.expand_dims(embedding, axis=0), frame, addr
@@ -235,14 +217,12 @@ class PersonReidentificationServer:
                 self.logger.info(f"First person id_{pid} registered from {addr}")
                 return
 
-            # Build comparison array: compute distance between mean of each person's gallery and new embedding
             candidates = []
             for key, value in self.detectedPersons.items():
                 gallery = value["extractedFeatures"]
                 if gallery.ndim == 1:
                     gallery_mean = gallery
                 else:
-                    # Mean along rows
                     gallery_mean = np.mean(gallery, axis=0).flatten()
                 score = distance.cosine(gallery_mean, embedding.flatten())
                 candidates.append(
@@ -253,7 +233,6 @@ class PersonReidentificationServer:
                     }
                 )
 
-            # Find best match (lowest cosine distance)
             candidates_sorted = sorted(candidates, key=lambda d: d["score"])
             top = candidates_sorted[0]
 
@@ -261,10 +240,8 @@ class PersonReidentificationServer:
             max_gallery = self.cfg["reid"].get("max_gallery_per_person", 512)
 
             if top["score"] < sim_thresh:
-                # Consider same person -> update gallery (vstack with cap)
                 person_key = f"id_{top['id']}"
                 current_gallery = self.detectedPersons[person_key]["extractedFeatures"]
-                # Ensure 2D
                 if current_gallery.ndim == 1:
                     current_gallery = np.expand_dims(current_gallery, axis=0)
 
@@ -273,7 +250,6 @@ class PersonReidentificationServer:
                         (current_gallery, np.expand_dims(embedding, axis=0))
                     )
                 else:
-                    # Rotate: drop oldest, append newest
                     new_gallery = np.vstack(
                         (np.expand_dims(embedding, axis=0), current_gallery[1:])
                     )
@@ -290,7 +266,6 @@ class PersonReidentificationServer:
                     f"Matched existing person id_{top['id']} (score={top['score']:.4f}) from {addr}"
                 )
             else:
-                # New person
                 pid = self.add_new_person(
                     np.expand_dims(embedding, axis=0), frame, addr
                 )
@@ -304,10 +279,11 @@ class PersonReidentificationServer:
 
     def handle_client(self):
         """Thread that receives frames while command == 'start'"""
+        # TODO: Por algum motivo eu to com tendo um delay e o sevidor não recebe as primeiras requisições
         if self.logger is None or self.cfg is None:
             return
 
-        buffer_timeout = self.cfg["server"].get("socket_timeout", 4)
+        buffer_timeout = self.cfg["server"].get("socket_timeout", 2)
 
         with self.server_lock:
             if self.server is None:
@@ -321,19 +297,16 @@ class PersonReidentificationServer:
 
         while self.command == "start" and self.running:
             try:
-                # First receive 4 bytes indicating size (network byte order)
                 size_data, addr = self.server.recvfrom(4)
                 if len(size_data) < 4:
                     self.logger.warning("Received invalid size header")
                     continue
                 size = struct.unpack("!I", size_data)[0]
 
-                # Then receive the buffer itself
                 buffer, addr = self.server.recvfrom(size)
                 if not buffer:
                     continue
 
-                # Decode image
                 frame = cv2.imdecode(
                     np.frombuffer(buffer, dtype=np.uint8), cv2.IMREAD_COLOR
                 )
@@ -341,24 +314,21 @@ class PersonReidentificationServer:
                     self.logger.warning(f"Could not decode image from {addr}")
                     continue
 
-                # Reset error counter on successful reception
                 consecutive_errors = 0
 
-                # Spawn thread to reId to not block UDP loop
                 t = threading.Thread(target=self.reId, args=(frame, addr))
                 t.daemon = True
                 self.threads.append(t)
                 t.start()
 
             except socket.timeout:
-                # Timeout is expected; simply continue to check command state
                 continue
             except socket.error as e:
                 if e.errno == errno.EAGAIN or e.errno == errno.EWOULDBLOCK:
                     self.logger.warning(
                         "Resource temporarily unavailable in socket operation"
                     )
-                    time.sleep(0.1)  # Brief pause before retry
+                    time.sleep(0.1)
                     continue
                 elif not self.running:
                     break
@@ -370,7 +340,7 @@ class PersonReidentificationServer:
                             "Too many consecutive socket errors, breaking handler loop"
                         )
                         break
-                    time.sleep(0.5)  # Longer pause after errors
+                    time.sleep(0.5)
             except Exception as e:
                 if not self.running:
                     break
@@ -401,10 +371,8 @@ class PersonReidentificationServer:
         self.command = "start"
         self.broadcast(self.command)
 
-        # Clean up any old threads
         self.cleanup_threads()
 
-        # Start handle_client thread
         t = threading.Thread(target=self.handle_client)
         t.daemon = True
         self.threads.append(t)
@@ -419,10 +387,8 @@ class PersonReidentificationServer:
         self.command = "exit"
         self.running = False
 
-        # Notify clients
         self.broadcast(self.command)
 
-        # Wait for threads to finish with timeout
         self.logger.info(f"Waiting for {len(self.threads)} threads to finish...")
 
         for i, t in enumerate(self.threads):
@@ -433,10 +399,8 @@ class PersonReidentificationServer:
             except Exception as e:
                 self.logger.error(f"Error joining thread {i}: {e}")
 
-        # Clear threads list
         self.threads.clear()
 
-        # Close socket
         with self.server_lock:
             if self.server:
                 try:
@@ -446,7 +410,6 @@ class PersonReidentificationServer:
                 except Exception as e:
                     self.logger.error(f"Error closing server socket: {e}")
 
-        # Write results to file
         try:
             with open("example.txt", "w") as f:
                 f.writelines(self.lines)
@@ -501,7 +464,7 @@ class PersonReidentificationServer:
 
                 elif cmd == "status":
                     status = self.get_status()
-                    print(f"\n=== Server Status ===")
+                    print("\n=== Server Status ===")
                     print(f"Command State: {status['command']}")
                     print(f"Detected Persons: {status['detected_persons']}")
                     print(f"Active Threads: {status['active_threads']}")
@@ -530,7 +493,6 @@ class PersonReidentificationServer:
         self.logger.info("Server stopped")
 
 
-# Usage example
 if __name__ == "__main__":
     server = PersonReidentificationServer("config.yaml")
     server.run()
