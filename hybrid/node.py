@@ -6,6 +6,7 @@ import yaml
 import cv2
 import numpy as np
 from ultralytics import YOLO
+import time
 
 
 def create_client_socket(transmission_cfg, server_cfg):
@@ -27,9 +28,9 @@ def create_client_socket(transmission_cfg, server_cfg):
         raise ValueError(f"Unsupported protocol: {protocol}")
 
 
-def enviar_mensagens(fila, transmission_cfg, server_cfg):
+def enviar_mensagens(fila, cfg, server_cfg):
     """Thread responsável por enviar as mensagens (imagens ou dados)."""
-    protocol = transmission_cfg.get("protocol", "udp").lower()
+    protocol = cfg.get("protocol", "udp").lower()
     server_addr = (server_cfg["host"], server_cfg["port"])
 
     if protocol == "udp":
@@ -74,18 +75,19 @@ def obj_detect(command_ref, fila, video_path, model_cfg):
         }
     )
 
-    frame_count = 0
-    frame_freq = model_cfg.get("frame_freq", 5)
+    # frame_count = 0
+    # frame_freq = model_cfg.get("frame_freq", 5)
 
     try:
         while command_ref["state"] == "start":
+            # frame_count += 1
+            # if frame_count % frame_freq != 0:
+            #     continue
+
             ret, img = cam.read()
+
             if not ret:
                 break
-
-            frame_count += 1
-            if frame_count % frame_freq != 0:
-                continue
 
             results = model(img)
             for result in results:
@@ -104,6 +106,7 @@ def obj_detect(command_ref, fila, video_path, model_cfg):
                         size = len(buffer)
                         header = f"{size}\0".encode("utf-8")
                         fila.put({"header": header, "buff": buffer})
+            time.sleep(0.05)
     finally:
         cam.release()
         print("[INFO] Captura finalizada.")
@@ -123,13 +126,12 @@ def run_instance(instance_cfg, cfg):
         args=(command_ref, fila, instance_cfg["video"], cfg["model"]),
     )
     send_thread = threading.Thread(
-        target=enviar_mensagens, args=(fila, transmission_cfg, server_cfg)
+        target=enviar_mensagens, args=(fila, cfg, server_cfg)
     )
 
     print(f"[INFO] Instância '{instance_cfg['name']}' iniciada. Aguardando comandos...")
     while command_ref["state"] != "exit":
         msg = client.recv(64).decode()
-        print(msg)
         if len(msg) > 0:
             print(f"[{instance_cfg['name']}] Mensagem recebida: {msg}")
             if msg == "start" and command_ref["state"] != msg:
@@ -142,6 +144,33 @@ def run_instance(instance_cfg, cfg):
                 detect_thread.join()
                 send_thread.join()
                 print(f"[INFO] Instância '{instance_cfg['name']}' finalizada.")
+            elif msg == "warmup":
+                print("[INFO] Warmup iniciado")
+                count = 0
+                while count < 30:
+                    img = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+                    h, w, _ = img.shape
+                    box = np.array(
+                        [
+                            w // 2 - 100,  # x1
+                            h // 2 - 100,  # y1
+                            w // 2 + 100,  # x2
+                            h // 2 + 100,  # y2
+                        ]
+                    )
+
+                    box = np.intp(box)
+
+                    _, buffer = cv2.imencode(
+                        ".jpg", img[box[1] : box[3], box[0] : box[2]]
+                    )
+
+                    size = len(buffer)
+                    header = f"{size}\0".encode("utf-8")
+                    fila.put({"header": header, "buff": buffer})
+                    count += 1
+                    time.sleep(0.05)
+                print("[INFO] Warmup finalizado")
 
 
 def main(cfg):

@@ -53,9 +53,11 @@
   - [x] [TR] Criar estrutura de classe para o servidor
   - [x] [TR] Criar estrutura de log
   - [x] [TR] Realziar a digestão em threads
-  - [ ] [TR] Debugar porque o servidor demora para receber as mensagens dos nós
+  - [x] [TR] Debugar porque o servidor demora para receber as mensagens dos nós
   - [X] [TR] Debugar problema de expection of frame ....
+  - [ ] [TR] Correção o servidor tá criando thread sem limite, o reId deveria ser feito via fila igual o handle client
   - [ ] [TR] Teste do deep_sort_realtime
+  - [ ] [TR] Refatorar o recebimento de imagens para uma forma mais otimizada e que me fale qual é o nó
 
 - [ ] Analise e avaliação das arquiteturas
   - [ ] Estudar como os datasets estão estruturados

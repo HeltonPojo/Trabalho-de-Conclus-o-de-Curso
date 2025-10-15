@@ -279,7 +279,6 @@ class PersonReidentificationServer:
 
     def handle_client(self):
         """Thread that receives frames while command == 'start'"""
-        # TODO: Por algum motivo eu to com tendo um delay e o sevidor não recebe as primeiras requisições
         if self.logger is None or self.cfg is None:
             return
 
@@ -298,6 +297,7 @@ class PersonReidentificationServer:
         while self.command == "start" and self.running:
             try:
                 size_data, addr = self.server.recvfrom(4)
+
                 if len(size_data) < 4:
                     self.logger.warning("Received invalid size header")
                     continue
@@ -336,6 +336,7 @@ class PersonReidentificationServer:
                     consecutive_errors += 1
                     self.logger.error(f"Socket error in handle_client: {e}")
                     if consecutive_errors >= max_consecutive_errors:
+                        self.command = "exit"
                         self.logger.error(
                             "Too many consecutive socket errors, breaking handler loop"
                         )
@@ -359,6 +360,34 @@ class PersonReidentificationServer:
         """Clean up finished threads"""
         self.threads = [t for t in self.threads if t.is_alive()]
 
+    def warmup(self, max_retries=100, retry_delay=0.1):
+        """Warmup routine to guarantee that the socket actually works"""
+        if self.server is None or self.logger is None:
+            return
+
+        self.broadcast("warmup")
+        warmup_success = False
+        attempt = 0
+        self.logger.info("Warmup routine started")
+        while attempt < max_retries and not warmup_success:
+            try:
+                self.server.setblocking(False)
+                size_data, addr = self.server.recvfrom(4)
+                print(f"[DEBUG] {attempt}")
+                self.server.setblocking(True)
+                warmup_success = True
+            except socket.error as e:
+                if e.errno == errno.EAGAIN or e.errno == errno.EWOULDBLOCK:
+                    attempt += 1
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    self.logger.error(f"Unexpected error in the warmup routine {e}")
+                    break
+        self.logger.info("Warmup routine finished")
+
+        return warmup_success
+
     def start_processing(self):
         """Start the processing loop"""
         if self.logger is None:
@@ -369,6 +398,8 @@ class PersonReidentificationServer:
             return
 
         self.command = "start"
+
+        self.warmup()
         self.broadcast(self.command)
 
         self.cleanup_threads()
