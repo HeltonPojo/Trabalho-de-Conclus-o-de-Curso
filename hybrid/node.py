@@ -61,7 +61,7 @@ def enviar_mensagens(fila, cfg, server_cfg):
         )
 
 
-def obj_detect(command_ref, fila, video_path, model_cfg):
+def obj_detect(command_ref, fila, video_path, model_cfg, name):
     """Thread de detecção de objetos."""
     cam = cv2.VideoCapture(video_path)
     model = YOLO(model_cfg["path"], task="detect")
@@ -75,6 +75,7 @@ def obj_detect(command_ref, fila, video_path, model_cfg):
         }
     )
 
+    bytes_name = name.encode("utf-8").ljust(32, b"\0")
     # frame_count = 0
     # frame_freq = model_cfg.get("frame_freq", 5)
 
@@ -104,7 +105,8 @@ def obj_detect(command_ref, fila, video_path, model_cfg):
                             ".jpg", img[box[1] : box[3], box[0] : box[2]]
                         )
                         size = len(buffer)
-                        header = f"{size}\0".encode("utf-8")
+                        size_bytes = str(size).zfill(4).encode("utf-8")
+                        header = bytes_name + size_bytes
                         fila.put({"header": header, "buff": buffer})
             time.sleep(0.05)
     finally:
@@ -123,7 +125,13 @@ def run_instance(instance_cfg, cfg):
     # Threads
     detect_thread = threading.Thread(
         target=obj_detect,
-        args=(command_ref, fila, instance_cfg["video"], cfg["model"]),
+        args=(
+            command_ref,
+            fila,
+            instance_cfg["video"],
+            cfg["model"],
+            instance_cfg["name"],
+        ),
     )
     send_thread = threading.Thread(
         target=enviar_mensagens, args=(fila, cfg, server_cfg)
@@ -167,7 +175,7 @@ def run_instance(instance_cfg, cfg):
 
                     size = len(buffer)
                     header = f"{size}\0".encode("utf-8")
-                    fila.put({"header": header, "buff": buffer})
+                    # fila.put({"header": header, "buff": buffer})
                     count += 1
                     time.sleep(0.05)
                 print("[INFO] Warmup finalizado")

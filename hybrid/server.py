@@ -296,12 +296,14 @@ class PersonReidentificationServer:
 
         while self.command == "start" and self.running:
             try:
-                size_data, addr = self.server.recvfrom(4)
+                data, addr = self.server.recvfrom(36)
 
-                if len(size_data) < 4:
+                if len(data) < 36:
                     self.logger.warning("Received invalid size header")
                     continue
-                size = struct.unpack("!I", size_data)[0]
+
+                client_name = data[:32].decode("utf-8").rstrip("\0")
+                size = int(data[32:36].decode("utf-8"))
 
                 buffer, addr = self.server.recvfrom(size)
                 if not buffer:
@@ -311,11 +313,12 @@ class PersonReidentificationServer:
                     np.frombuffer(buffer, dtype=np.uint8), cv2.IMREAD_COLOR
                 )
                 if frame is None:
-                    self.logger.warning(f"Could not decode image from {addr}")
+                    self.logger.warning(f"Could not decode image from {client_name}")
                     continue
 
                 consecutive_errors = 0
 
+                # TODO: Isso deveria funcionar em uma fila para não criar threads de forma desordenada
                 t = threading.Thread(target=self.reId, args=(frame, addr))
                 t.daemon = True
                 self.threads.append(t)
@@ -373,7 +376,6 @@ class PersonReidentificationServer:
             try:
                 self.server.setblocking(False)
                 size_data, addr = self.server.recvfrom(4)
-                print(f"[DEBUG] {attempt}")
                 self.server.setblocking(True)
                 warmup_success = True
             except socket.error as e:
