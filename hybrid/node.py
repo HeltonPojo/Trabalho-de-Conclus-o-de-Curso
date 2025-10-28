@@ -76,14 +76,15 @@ def obj_detect(command_ref, fila, video_path, model_cfg, name):
     )
 
     bytes_name = name.encode("utf-8").ljust(32, b"\0")
-    # frame_count = 0
-    # frame_freq = model_cfg.get("frame_freq", 5)
+
+    frame_count = 0
+    frame_freq = model_cfg.get("frame_freq", 15)
 
     try:
         while command_ref["state"] == "start":
-            # frame_count += 1
-            # if frame_count % frame_freq != 0:
-            #     continue
+            frame_count += 1
+            if frame_count % frame_freq != 0:
+                continue
 
             ret, img = cam.read()
 
@@ -108,7 +109,7 @@ def obj_detect(command_ref, fila, video_path, model_cfg, name):
                         size_bytes = str(size).zfill(4).encode("utf-8")
                         header = bytes_name + size_bytes
                         fila.put({"header": header, "buff": buffer})
-            time.sleep(0.05)
+            # time.sleep(0.05)
     finally:
         cam.release()
         print("[INFO] Captura finalizada.")

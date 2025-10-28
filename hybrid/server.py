@@ -1,5 +1,6 @@
 import socket
 import threading
+import queue
 import cv2
 import numpy as np
 import struct
@@ -28,6 +29,7 @@ class PersonReidentificationServer:
         self.config_path = config_path
         self.running = False
         self.logger = None
+        self.queue = queue.Queue()
 
     def setup_logging(self):
         """Setup logging configuration"""
@@ -40,12 +42,13 @@ class PersonReidentificationServer:
         )
 
         logging.basicConfig(
-            level=logging.INFO,
+            level=logging.WARNING,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            handlers=[logging.FileHandler(log_file)],
+            handlers=[
+                logging.FileHandler(log_file),
+            ],
         )
         self.logger = logging.getLogger("PersonReIDServer")
-        # self.logger.propagate = False
 
     def load_config(self):
         """Load configuration from YAML file"""
@@ -144,7 +147,7 @@ class PersonReidentificationServer:
                     )
                 except socket.error as e:
                     if e.errno == errno.EAGAIN or e.errno == errno.EWOULDBLOCK:
-                        self.logger.warning(
+                        self.logger.info(
                             f"Resource temporarily unavailable for {client['host']}:{client['port']}"
                         )
                         continue
@@ -161,7 +164,7 @@ class PersonReidentificationServer:
                 f"Broadcast '{message}' completed: {success_count}/{len(self.clients)} clients"
             )
 
-    def add_new_person(self, extractedFeature, frame, addr):
+    def add_new_person(self, extractedFeature, client_name):
         """Add new person to the gallery"""
         if self.logger is None:
             return
@@ -175,107 +178,132 @@ class PersonReidentificationServer:
             "last_seen": datetime.now().isoformat(),
         }
 
-        _, port = addr
         self.id_counter += 1
 
-        self.logger.info(f"New person id_{pid} registered from {addr}")
+        self.logger.info(f"New person id_{pid} registered from {client_name}")
         return pid
 
-    def reId(self, frame, addr):
+    def reId(self):
         """
         Re-identification logic using DeepSORT for embedding extraction
         """
+
+        print("[DEBUG] REID iniciando")
         if self.logger is None or self.tracker is None or self.cfg is None:
+            print("[DEBUG] errando")
             return
 
-        try:
-            _, port = addr
+        print("[DEBUG-REID] 1")
+        while True:
+            print("[DEBUG-REID] 2")
+            item = self.queue.get()
+            print("[DEBUG-REID] 3")
+            if item is None:
+                break
+            frame = item["frame"]
+            client_name = item["client_name"]
 
-            h, w = frame.shape[:2]
-            detections = [([0, 0, w, h], 1.0, "person")]
+            try:
+                print("[DEBUG-REID] 4")
+                h, w = frame.shape[:2]
+                detections = [([0, 0, w, h], 1.0, "person")]
 
-            tracks = self.tracker.update_tracks(detections, frame=frame)
+                tracks = self.tracker.update_tracks(detections, frame=frame)
 
-            embedding = None
-            for tr in tracks:
-                if tr.features and len(tr.features) > 0:
-                    embedding = np.asarray(tr.features[-1], dtype=np.float32)
-                    break
+                embedding = None
+                for tr in tracks:
+                    if tr.features and len(tr.features) > 0:
+                        embedding = np.asarray(tr.features[-1], dtype=np.float32)
+                        break
 
-            if embedding is None:
-                embedding = np.mean(frame, axis=(0, 1)).astype(np.float32)
+                print("[DEBUG-REID] 5")
+                if embedding is None:
+                    embedding = np.mean(frame, axis=(0, 1)).astype(np.float32)
+                    embedding = embedding.flatten()
+                    self.logger.debug("Used fallback feature extraction")
+
                 embedding = embedding.flatten()
-                self.logger.debug("Used fallback feature extraction")
 
-            embedding = embedding.flatten()
+                print("[DEBUG-REID] 5")
+                if not self.detectedPersons:
+                    pid = self.add_new_person(
+                        np.expand_dims(embedding, axis=0), client_name
+                    )
+                    self.lines.append(f"{pid} {client_name} 1\n")
+                    self.logger.info(
+                        f"First person id_{pid} registered from {client_name}"
+                    )
+                    continue
 
-            if not self.detectedPersons:
-                pid = self.add_new_person(
-                    np.expand_dims(embedding, axis=0), frame, addr
-                )
-                self.lines.append(f"{pid} {port} 1\n")
-                self.logger.info(f"First person id_{pid} registered from {addr}")
-                return
+                print("[DEBUG-REID] 6")
+                candidates = []
+                for key, value in self.detectedPersons.items():
+                    gallery = value["extractedFeatures"]
+                    if gallery.ndim == 1:
+                        gallery_mean = gallery
+                    else:
+                        gallery_mean = np.mean(gallery, axis=0).flatten()
+                    score = distance.cosine(gallery_mean, embedding.flatten())
+                    candidates.append(
+                        {
+                            "id": value["id"],
+                            "appearances": value["appearances"],
+                            "score": float(score),
+                        }
+                    )
 
-            candidates = []
-            for key, value in self.detectedPersons.items():
-                gallery = value["extractedFeatures"]
-                if gallery.ndim == 1:
-                    gallery_mean = gallery
-                else:
-                    gallery_mean = np.mean(gallery, axis=0).flatten()
-                score = distance.cosine(gallery_mean, embedding.flatten())
-                candidates.append(
-                    {
-                        "id": value["id"],
-                        "appearances": value["appearances"],
-                        "score": float(score),
+                print("[DEBUG-REID] 7")
+                candidates_sorted = sorted(candidates, key=lambda d: d["score"])
+                top = candidates_sorted[0]
+
+                sim_thresh = self.cfg["reid"].get("similarity_threshold", 0.13)
+                max_gallery = self.cfg["reid"].get("max_gallery_per_person", 512)
+
+                print("[DEBUG-REID] 8")
+                if top["score"] < sim_thresh:
+                    person_key = f"id_{top['id']}"
+                    current_gallery = self.detectedPersons[person_key][
+                        "extractedFeatures"
+                    ]
+                    if current_gallery.ndim == 1:
+                        current_gallery = np.expand_dims(current_gallery, axis=0)
+
+                    if current_gallery.shape[0] < max_gallery:
+                        new_gallery = np.vstack(
+                            (current_gallery, np.expand_dims(embedding, axis=0))
+                        )
+                    else:
+                        new_gallery = np.vstack(
+                            (np.expand_dims(embedding, axis=0), current_gallery[1:])
+                        )
+
+                    self.detectedPersons[person_key] = {
+                        "extractedFeatures": new_gallery,
+                        "id": top["id"],
+                        "appearances": top["appearances"] + 1,
+                        "first_seen": self.detectedPersons[person_key]["first_seen"],
+                        "last_seen": datetime.now().isoformat(),
                     }
-                )
-
-            candidates_sorted = sorted(candidates, key=lambda d: d["score"])
-            top = candidates_sorted[0]
-
-            sim_thresh = self.cfg["reid"].get("similarity_threshold", 0.13)
-            max_gallery = self.cfg["reid"].get("max_gallery_per_person", 512)
-
-            if top["score"] < sim_thresh:
-                person_key = f"id_{top['id']}"
-                current_gallery = self.detectedPersons[person_key]["extractedFeatures"]
-                if current_gallery.ndim == 1:
-                    current_gallery = np.expand_dims(current_gallery, axis=0)
-
-                if current_gallery.shape[0] < max_gallery:
-                    new_gallery = np.vstack(
-                        (current_gallery, np.expand_dims(embedding, axis=0))
+                    self.lines.append(
+                        f"{top['id']} {client_name} {top['appearances'] + 1}\n"
+                    )
+                    self.logger.info(
+                        f"Matched existing person id_{top['id']} (score={top['score']:.4f}) from {client_name}"
                     )
                 else:
-                    new_gallery = np.vstack(
-                        (np.expand_dims(embedding, axis=0), current_gallery[1:])
+                    pid = self.add_new_person(
+                        np.expand_dims(embedding, axis=0), client_name
+                    )
+                    self.lines.append(f"{pid} {client_name} 1\n")
+                    self.logger.info(
+                        f"New person id_{pid} created (best match score={top['score']:.4f}) from {client_name}"
                     )
 
-                self.detectedPersons[person_key] = {
-                    "extractedFeatures": new_gallery,
-                    "id": top["id"],
-                    "appearances": top["appearances"] + 1,
-                    "first_seen": self.detectedPersons[person_key]["first_seen"],
-                    "last_seen": datetime.now().isoformat(),
-                }
-                self.lines.append(f"{top['id']} {port} {top['appearances'] + 1}\n")
-                self.logger.info(
-                    f"Matched existing person id_{top['id']} (score={top['score']:.4f}) from {addr}"
-                )
-            else:
-                pid = self.add_new_person(
-                    np.expand_dims(embedding, axis=0), frame, addr
-                )
-                self.lines.append(f"{pid} {port} 1\n")
-                self.logger.info(
-                    f"New person id_{pid} created (best match score={top['score']:.4f}) from {addr}"
-                )
+            except Exception as e:
+                print("[DEBUG-ERRO-REID]")
+                self.logger.error(f"Exception processing frame from {client_name}: {e}")
 
-        except Exception as e:
-            self.logger.error(f"Exception processing frame from {addr}: {e}")
+        print("[DEBUG] REID finalizando")
 
     def handle_client(self):
         """Thread that receives frames while command == 'start'"""
@@ -296,39 +324,47 @@ class PersonReidentificationServer:
 
         while self.command == "start" and self.running:
             try:
-                data, addr = self.server.recvfrom(36)
+                data, _ = self.server.recvfrom(36)
 
                 if len(data) < 36:
                     self.logger.warning("Received invalid size header")
                     continue
 
-                client_name = data[:32].decode("utf-8").rstrip("\0")
-                size = int(data[32:36].decode("utf-8"))
+                try:
+                    client_name = data[:32].decode("utf-8").rstrip("\0")
+                    size = int(data[32:36].decode("utf-8"))
+                except Exception as e:
+                    # print(f"[DEBUG-HEADER] {data}")
+                    self.logger.error(f"Could not decode the header with error: {e}")
+                    continue
 
-                buffer, addr = self.server.recvfrom(size)
+                buffer, _ = self.server.recvfrom(size)
                 if not buffer:
                     continue
 
-                frame = cv2.imdecode(
-                    np.frombuffer(buffer, dtype=np.uint8), cv2.IMREAD_COLOR
-                )
+                try:
+                    frame = cv2.imdecode(
+                        np.frombuffer(buffer, dtype=np.uint8), cv2.IMREAD_COLOR
+                    )
+                except Exception as e:
+                    self.logger.error(f"Could not decode the image with error: {e}")
+                    continue
+
                 if frame is None:
-                    self.logger.warning(f"Could not decode image from {client_name}")
+                    # BUG: Tem mensagem chegando aqui no lugar da imagem
+                    # print(f"[DEBUG] {buffer}")
+                    self.logger.error(f"Could not decode image from {client_name}")
                     continue
 
                 consecutive_errors = 0
 
-                # TODO: Isso deveria funcionar em uma fila para não criar threads de forma desordenada
-                t = threading.Thread(target=self.reId, args=(frame, addr))
-                t.daemon = True
-                self.threads.append(t)
-                t.start()
+                self.queue.put({"frame": frame, "client_name": client_name})
 
             except socket.timeout:
                 continue
             except socket.error as e:
                 if e.errno == errno.EAGAIN or e.errno == errno.EWOULDBLOCK:
-                    self.logger.warning(
+                    self.logger.info(
                         "Resource temporarily unavailable in socket operation"
                     )
                     time.sleep(0.1)
@@ -410,6 +446,11 @@ class PersonReidentificationServer:
         t.daemon = True
         self.threads.append(t)
         t.start()
+        r = threading.Thread(target=self.reId, args=())
+        r.daemon = True
+        self.threads.append(r)
+        r.start()
+
         self.logger.info("Processing started - handler thread launched")
 
     def stop_processing(self):
@@ -417,6 +458,7 @@ class PersonReidentificationServer:
         if self.logger is None:
             return
 
+        self.queue.put(None)
         self.command = "exit"
         self.running = False
 
@@ -502,6 +544,7 @@ class PersonReidentificationServer:
                     print(f"Detected Persons: {status['detected_persons']}")
                     print(f"Active Threads: {status['active_threads']}")
                     print(f"ReID Events: {status['total_reid_events']}")
+                    print(f"ReID Queue: {self.queue.qsize()}")
                     print(f"Clients Configured: {status['clients_configured']}")
                     print(f"Next ID: {status['id_counter']}")
                     print("====================\n")
