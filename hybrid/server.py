@@ -42,10 +42,11 @@ class PersonReidentificationServer:
         )
 
         logging.basicConfig(
-            level=logging.WARNING,
+            level=logging.INFO,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             handlers=[
                 logging.FileHandler(log_file),
+                # logging.StreamHandler()
             ],
         )
         self.logger = logging.getLogger("PersonReIDServer")
@@ -310,7 +311,7 @@ class PersonReidentificationServer:
 
         while self.command == "start" and self.running:
             try:
-                data, _ = self.server.recvfrom(36)
+                data, _ = self.server.recvfrom(65535)
 
                 if len(data) < 36:
                     self.logger.warning("Received invalid size header")
@@ -320,11 +321,10 @@ class PersonReidentificationServer:
                     client_name = data[:32].decode("utf-8").rstrip("\0")
                     size = int(data[32:36].decode("utf-8"))
                 except Exception as e:
-                    # print(f"[DEBUG-HEADER] {data}")
                     self.logger.error(f"Could not decode the header with error: {e}")
                     continue
 
-                buffer, _ = self.server.recvfrom(size)
+                buffer = data[36 : 36 + size]
                 if not buffer:
                     continue
 
@@ -337,8 +337,6 @@ class PersonReidentificationServer:
                     continue
 
                 if frame is None:
-                    # BUG: Tem mensagem chegando aqui no lugar da imagem
-                    # print(f"[DEBUG] {buffer}")
                     self.logger.error(f"Could not decode image from {client_name}")
                     continue
 

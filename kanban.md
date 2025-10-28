@@ -57,9 +57,9 @@
   - [X] [TR] Debugar problema de expection of frame ....
   - [X] [TR] Correção o servidor tá criando thread sem limite, o reId deveria ser feito via fila igual o handle client
   - [X] [TR] A fila do REID não está andando
-  - [ ] [TR] As mensagens estão ficando desordenadas
+  - [X] [TR] As mensagens estão ficando desordenadas
   - [ ] [TR] Teste do deep_sort_realtime
-  - [ ] [TR] Refatorar o recebimento de imagens para uma forma mais otimizada e que me fale qual é o nó
+  - [X] [TR] Refatorar o recebimento de imagens para uma forma mais otimizada e que me fale qual é o nó
 
 - [ ] Analise e avaliação das arquiteturas
   - [ ] Estudar como os datasets estão estruturados

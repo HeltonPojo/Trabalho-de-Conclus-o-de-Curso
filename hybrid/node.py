@@ -40,8 +40,7 @@ def enviar_mensagens(fila, cfg, server_cfg):
             if item is None:
                 break
             try:
-                sock.sendto(item["header"], server_addr)
-                sock.sendto(item["buff"], server_addr)
+                sock.sendto(item["packet"], server_addr)
             except Exception as e:
                 print(f"[ERRO][UDP]: {e}")
     elif protocol == "tcp":
@@ -106,13 +105,16 @@ def obj_detect(command_ref, fila, video_path, model_cfg, name):
                             ".jpg", img[box[1] : box[3], box[0] : box[2]]
                         )
                         size = len(buffer)
+                        if size > 9000:
+                            continue
                         size_bytes = str(size).zfill(4).encode("utf-8")
                         header = bytes_name + size_bytes
-                        fila.put({"header": header, "buff": buffer})
+                        packet = header + buffer.tobytes()
+                        fila.put({"packet": packet})
             # time.sleep(0.05)
     finally:
         cam.release()
-        print("[INFO] Captura finalizada.")
+        print(f"[INFO] Captura finalizada {name}.")
 
 
 def run_instance(instance_cfg, cfg):
