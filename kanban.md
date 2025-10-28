@@ -55,7 +55,9 @@
   - [x] [TR] Realziar a digestão em threads
   - [x] [TR] Debugar porque o servidor demora para receber as mensagens dos nós
   - [X] [TR] Debugar problema de expection of frame ....
-  - [ ] [TR] Correção o servidor tá criando thread sem limite, o reId deveria ser feito via fila igual o handle client
+  - [X] [TR] Correção o servidor tá criando thread sem limite, o reId deveria ser feito via fila igual o handle client
+  - [X] [TR] A fila do REID não está andando
+  - [ ] [TR] As mensagens estão ficando desordenadas
   - [ ] [TR] Teste do deep_sort_realtime
   - [ ] [TR] Refatorar o recebimento de imagens para uma forma mais otimizada e que me fale qual é o nó
 
