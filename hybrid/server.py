@@ -188,23 +188,17 @@ class PersonReidentificationServer:
         Re-identification logic using DeepSORT for embedding extraction
         """
 
-        print("[DEBUG] REID iniciando")
         if self.logger is None or self.tracker is None or self.cfg is None:
-            print("[DEBUG] errando")
             return
 
-        print("[DEBUG-REID] 1")
         while True:
-            print("[DEBUG-REID] 2")
             item = self.queue.get()
-            print("[DEBUG-REID] 3")
             if item is None:
                 break
             frame = item["frame"]
             client_name = item["client_name"]
 
             try:
-                print("[DEBUG-REID] 4")
                 h, w = frame.shape[:2]
                 detections = [([0, 0, w, h], 1.0, "person")]
 
@@ -216,7 +210,6 @@ class PersonReidentificationServer:
                         embedding = np.asarray(tr.features[-1], dtype=np.float32)
                         break
 
-                print("[DEBUG-REID] 5")
                 if embedding is None:
                     embedding = np.mean(frame, axis=(0, 1)).astype(np.float32)
                     embedding = embedding.flatten()
@@ -224,7 +217,6 @@ class PersonReidentificationServer:
 
                 embedding = embedding.flatten()
 
-                print("[DEBUG-REID] 5")
                 if not self.detectedPersons:
                     pid = self.add_new_person(
                         np.expand_dims(embedding, axis=0), client_name
@@ -235,7 +227,6 @@ class PersonReidentificationServer:
                     )
                     continue
 
-                print("[DEBUG-REID] 6")
                 candidates = []
                 for key, value in self.detectedPersons.items():
                     gallery = value["extractedFeatures"]
@@ -252,14 +243,12 @@ class PersonReidentificationServer:
                         }
                     )
 
-                print("[DEBUG-REID] 7")
                 candidates_sorted = sorted(candidates, key=lambda d: d["score"])
                 top = candidates_sorted[0]
 
                 sim_thresh = self.cfg["reid"].get("similarity_threshold", 0.13)
                 max_gallery = self.cfg["reid"].get("max_gallery_per_person", 512)
 
-                print("[DEBUG-REID] 8")
                 if top["score"] < sim_thresh:
                     person_key = f"id_{top['id']}"
                     current_gallery = self.detectedPersons[person_key][
@@ -300,10 +289,7 @@ class PersonReidentificationServer:
                     )
 
             except Exception as e:
-                print("[DEBUG-ERRO-REID]")
                 self.logger.error(f"Exception processing frame from {client_name}: {e}")
-
-        print("[DEBUG] REID finalizando")
 
     def handle_client(self):
         """Thread that receives frames while command == 'start'"""
